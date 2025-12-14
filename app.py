@@ -344,13 +344,28 @@ class ArabicPDFOCRApp(QMainWindow):
                 return path
         return None
     
-    def download_file(self, url, dest_path):
+    def download_file(self, url, dest_path, progress_callback=None):
         try:
-            self.update_status("Downloading Tesseract OCR...")
-            urllib.request.urlretrieve(url, dest_path)
+            def show_progress(block_num, block_size, total_size):
+                if progress_callback and total_size > 0:
+                    percent = min(100, (block_num * block_size * 100) // total_size)
+                    progress_callback(percent)
+            
+            urllib.request.urlretrieve(url, dest_path, show_progress)
             return True
         except Exception as e:
-            QMessageBox.critical(self, "Download Error", f"Failed to download:\n{e}")
+            return False
+    
+    def install_tesseract_silent(self, installer_path):
+        try:
+            install_cmd = [
+                str(installer_path),
+                "/S",
+                "/D=C:\\Program Files\\Tesseract-OCR"
+            ]
+            result = subprocess.run(install_cmd, capture_output=True, timeout=300)
+            return result.returncode == 0
+        except Exception:
             return False
     
     def install_tesseract_windows_auto(self):
@@ -392,20 +407,79 @@ class ArabicPDFOCRApp(QMainWindow):
             temp_dir = Path(os.environ.get('TEMP', app_dir))
             installer_path = temp_dir / "tesseract-installer.exe"
             
-            QMessageBox.information(
+            reply2 = QMessageBox.question(
                 self,
-                "Installation Required",
-                "Automatic installation requires downloading the installer.\n\n"
-                "Please:\n"
-                "1. Download Tesseract from:\n"
-                "   https://github.com/UB-Mannheim/tesseract/releases/latest\n"
-                "   Look for: tesseract-ocr-w64-setup-*.exe\n\n"
-                "2. Run the installer\n"
-                "3. Install to: C:\\Program Files\\Tesseract-OCR\n"
-                "4. Restart this application\n\n"
-                "The app will auto-detect it after installation.\n\n"
-                "Alternatively, you can manually download and I'll help configure it."
+                "Auto-Install Tesseract",
+                "I can download and install Tesseract automatically.\n\n"
+                "This will:\n"
+                "1. Download Tesseract installer (~50MB)\n"
+                "2. Install it silently\n"
+                "3. Configure automatically\n\n"
+                "Click Yes to auto-install, No for manual installation.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
             )
+            
+            if reply2 == QMessageBox.Yes:
+                temp_dir = Path(os.environ.get('TEMP', app_dir))
+                installer_path = temp_dir / "tesseract-installer.exe"
+                
+                tesseract_url = "https://digi.bib.uni-mannheim.de/tesseract/tesseract-ocr-w64-setup-5.4.0.20240619.exe"
+                
+                self.update_status("Downloading Tesseract OCR installer...")
+                QApplication.processEvents()
+                
+                if not self.download_file(tesseract_url, installer_path, lambda p: self.update_status(f"Downloading... {p}%")):
+                    QMessageBox.critical(
+                        self,
+                        "Download Failed",
+                        "Failed to download Tesseract installer.\n\n"
+                        "Please download manually from:\n"
+                        "https://github.com/UB-Mannheim/tesseract/wiki\n\n"
+                        "Install to: C:\\Program Files\\Tesseract-OCR"
+                    )
+                    return False
+                
+                self.update_status("Installing Tesseract OCR...")
+                QApplication.processEvents()
+                
+                if self.install_tesseract_silent(installer_path):
+                    default_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+                    if os.path.exists(default_path):
+                        pytesseract.pytesseract.tesseract_cmd = default_path
+                        try:
+                            pytesseract.get_tesseract_version()
+                            QMessageBox.information(
+                                self,
+                                "Installation Complete",
+                                "Tesseract OCR has been installed successfully!\n\n"
+                                "The application is now ready to use."
+                            )
+                            installer_path.unlink(missing_ok=True)
+                            return True
+                        except Exception:
+                            pass
+                
+                QMessageBox.warning(
+                    self,
+                    "Installation Issue",
+                    "Tesseract installer ran but may need a restart.\n\n"
+                    "Please restart this application to complete setup."
+                )
+                installer_path.unlink(missing_ok=True)
+                return False
+            else:
+                QMessageBox.information(
+                    self,
+                    "Manual Installation",
+                    "To install Tesseract OCR manually:\n\n"
+                    "1. Download from:\n"
+                    "   https://github.com/UB-Mannheim/tesseract/wiki\n\n"
+                    "2. Run the installer\n"
+                    "3. Install to: C:\\Program Files\\Tesseract-OCR\n\n"
+                    "4. Restart this application\n\n"
+                    "The app will auto-detect it after installation."
+                )
             
             default_paths = [
                 r"C:\Program Files\Tesseract-OCR\tesseract.exe",
