@@ -15,10 +15,10 @@ try:
     from PySide6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QPushButton, QLabel, QLineEdit, QTextEdit, QProgressBar,
-        QComboBox, QFileDialog, QMessageBox, QFrame, QGroupBox
+        QComboBox, QFileDialog, QMessageBox, QFrame, QGroupBox, QDialog, QDialogButtonBox
     )
-    from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QTimer, Signal, QObject
-    from PySide6.QtGui import QFont, QPalette, QColor, QIcon
+    from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QTimer, Signal, QObject, QUrl
+    from PySide6.QtGui import QFont, QPalette, QColor, QIcon, QDesktopServices
     from pdf2image import convert_from_path
     import pytesseract
     from PIL import Image, ImageEnhance, ImageFilter
@@ -34,6 +34,34 @@ class WorkerSignals(QObject):
     text_update = Signal(str)
     finished = Signal(str, int, int)
     error = Signal(str)
+
+
+class LinkMessageBox(QDialog):
+    def __init__(self, parent, title, message, links=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(500)
+        
+        layout = QVBoxLayout()
+        
+        label = QLabel(message)
+        label.setWordWrap(True)
+        label.setOpenExternalLinks(True)
+        label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        layout.addWidget(label)
+        
+        if links:
+            for link_text, link_url in links.items():
+                link_label = QLabel(f'<a href="{link_url}" style="color: #0ea5e9;">{link_text}</a>')
+                link_label.setOpenExternalLinks(True)
+                link_label.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
+                layout.addWidget(link_label)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
+        
+        self.setLayout(layout)
 
 
 class ArabicPDFOCRApp(QMainWindow):
@@ -394,15 +422,16 @@ class ArabicPDFOCRApp(QMainWindow):
             )
             
             if reply == QMessageBox.No:
-                QMessageBox.information(
+                dialog = LinkMessageBox(
                     self,
                     "Manual Installation",
                     "Please install Tesseract OCR manually:\n\n"
-                    "1. Download from:\n"
-                    "   https://github.com/UB-Mannheim/tesseract/wiki\n"
-                    "2. Install to default location\n"
-                    "3. Restart this application"
+                    "1. Download from the link below\n"
+                    "2. Install to default location: C:\\Program Files\\Tesseract-OCR\n"
+                    "3. Restart this application",
+                    {"Download Tesseract OCR": "https://github.com/UB-Mannheim/tesseract/wiki"}
                 )
+                dialog.exec()
                 return False
             
             temp_dir = Path(os.environ.get('TEMP', app_dir))
@@ -431,14 +460,15 @@ class ArabicPDFOCRApp(QMainWindow):
                 QApplication.processEvents()
                 
                 if not self.download_file(tesseract_url, installer_path, lambda p: self.update_status(f"Downloading... {p}%")):
-                    QMessageBox.critical(
+                    dialog = LinkMessageBox(
                         self,
                         "Download Failed",
                         "Failed to download Tesseract installer.\n\n"
-                        "Please download manually from:\n"
-                        "https://github.com/UB-Mannheim/tesseract/wiki\n\n"
-                        "Install to: C:\\Program Files\\Tesseract-OCR"
+                        "Please download manually from the link below:\n\n"
+                        "Install to: C:\\Program Files\\Tesseract-OCR",
+                        {"Download Tesseract OCR": "https://github.com/UB-Mannheim/tesseract/wiki"}
                     )
+                    dialog.exec()
                     return False
                 
                 self.update_status("Installing Tesseract OCR...")
@@ -470,17 +500,18 @@ class ArabicPDFOCRApp(QMainWindow):
                 installer_path.unlink(missing_ok=True)
                 return False
             else:
-                QMessageBox.information(
+                dialog = LinkMessageBox(
                     self,
                     "Manual Installation",
                     "To install Tesseract OCR manually:\n\n"
-                    "1. Download from:\n"
-                    "   https://github.com/UB-Mannheim/tesseract/wiki\n\n"
+                    "1. Download from the link below\n"
                     "2. Run the installer\n"
-                    "3. Install to: C:\\Program Files\\Tesseract-OCR\n\n"
+                    "3. Install to: C:\\Program Files\\Tesseract-OCR\n"
                     "4. Restart this application\n\n"
-                    "The app will auto-detect it after installation."
+                    "The app will auto-detect it after installation.",
+                    {"Download Tesseract OCR": "https://github.com/UB-Mannheim/tesseract/wiki"}
                 )
+                dialog.exec()
             
             default_paths = [
                 r"C:\Program Files\Tesseract-OCR\tesseract.exe",
@@ -535,15 +566,16 @@ class ArabicPDFOCRApp(QMainWindow):
             )
             
             if reply == QMessageBox.No:
-                QMessageBox.information(
+                dialog = LinkMessageBox(
                     self,
                     "Manual Installation",
                     "Please install Poppler manually:\n\n"
-                    "1. Download from:\n"
-                    "   https://github.com/oschwartz10612/poppler-windows/releases\n\n"
+                    "1. Download from the link below\n"
                     "2. Extract to: C:\\poppler\n"
-                    "3. Restart this application"
+                    "3. Restart this application",
+                    {"Download Poppler for Windows": "https://github.com/oschwartz10612/poppler-windows/releases"}
                 )
+                dialog.exec()
                 return None
             
             temp_dir = Path(os.environ.get('TEMP', app_dir))
@@ -554,16 +586,17 @@ class ArabicPDFOCRApp(QMainWindow):
             self.update_status("Downloading Poppler...")
             QApplication.processEvents()
             
-            if not self.download_file(poppler_url, poppler_zip, lambda p: self.update_status(f"Downloading Poppler... {p}%")):
-                QMessageBox.critical(
-                    self,
-                    "Download Failed",
-                    "Failed to download Poppler.\n\n"
-                    "Please download manually from:\n"
-                    "https://github.com/oschwartz10612/poppler-windows/releases\n\n"
-                    "Extract to: C:\\poppler"
-                )
-                return None
+                if not self.download_file(poppler_url, poppler_zip, lambda p: self.update_status(f"Downloading Poppler... {p}%")):
+                    dialog = LinkMessageBox(
+                        self,
+                        "Download Failed",
+                        "Failed to download Poppler.\n\n"
+                        "Please download manually from the link below:\n\n"
+                        "Extract to: C:\\poppler",
+                        {"Download Poppler for Windows": "https://github.com/oschwartz10612/poppler-windows/releases"}
+                    )
+                    dialog.exec()
+                    return None
             
             self.update_status("Extracting Poppler...")
             QApplication.processEvents()
@@ -624,15 +657,17 @@ class ArabicPDFOCRApp(QMainWindow):
             try:
                 pytesseract.get_tesseract_version()
             except Exception:
-                QMessageBox.warning(
+                dialog = LinkMessageBox(
                     self,
                     "Tesseract Not Found",
                     "Tesseract OCR is not installed.\n\n"
-                    "Installation:\n"
+                    "Installation commands:\n"
                     "Ubuntu/Debian: sudo apt-get install tesseract-ocr tesseract-ocr-ara\n"
                     "Fedora: sudo dnf install tesseract tesseract-langpack-ara\n"
-                    "Arch: sudo pacman -S tesseract tesseract-data-ara"
+                    "Arch: sudo pacman -S tesseract tesseract-data-ara",
+                    {"Tesseract Documentation": "https://github.com/tesseract-ocr/tesseract"}
                 )
+                dialog.exec()
     
     def browse_pdf(self):
         filename, _ = QFileDialog.getOpenFileName(
