@@ -358,34 +358,47 @@ class ArabicPDFOCRApp(QMainWindow):
                 self,
                 "Tesseract Not Found",
                 "Tesseract OCR is required but not found.\n\n"
-                "Would you like to download and install it automatically?\n\n"
-                "This will download ~50MB and install Tesseract OCR.",
+                "Options:\n"
+                "1. Auto-detect if installed in default location\n"
+                "2. Manual installation guide\n\n"
+                "Click Yes to check default location, No for manual guide.",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes
             )
             
-            if reply == QMessageBox.No:
+            if reply == QMessageBox.Yes:
+                default_paths = [
+                    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+                ]
+                for path in default_paths:
+                    if os.path.exists(path):
+                        pytesseract.pytesseract.tesseract_cmd = path
+                        QMessageBox.information(self, "Success", f"Tesseract found at:\n{path}")
+                        return True
+                
                 QMessageBox.information(
                     self,
-                    "Manual Installation",
-                    "Please install Tesseract OCR manually:\n\n"
-                    "1. Download from: https://github.com/UB-Mannheim/tesseract/wiki\n"
-                    "2. Install to default location\n"
+                    "Not Found",
+                    "Tesseract not found in default locations.\n\n"
+                    "Please install Tesseract OCR:\n"
+                    "1. Download: https://github.com/UB-Mannheim/tesseract/wiki\n"
+                    "2. Install to: C:\\Program Files\\Tesseract-OCR\n"
                     "3. Restart this application"
                 )
-                return False
-            
-            QMessageBox.information(
-                self,
-                "Download Required",
-                "Automatic installation requires manual download.\n\n"
-                "Please:\n"
-                "1. Download Tesseract from:\n"
-                "   https://github.com/UB-Mannheim/tesseract/wiki\n"
-                "2. Install it\n"
-                "3. Restart this application\n\n"
-                "The app will auto-detect it after installation."
-            )
+            else:
+                QMessageBox.information(
+                    self,
+                    "Installation Guide",
+                    "To install Tesseract OCR:\n\n"
+                    "1. Download from:\n"
+                    "   https://github.com/UB-Mannheim/tesseract/wiki\n\n"
+                    "2. Run the installer\n"
+                    "3. Install to default location:\n"
+                    "   C:\\Program Files\\Tesseract-OCR\n\n"
+                    "4. Restart this application\n\n"
+                    "The app will auto-detect it after installation."
+                )
             return False
             
         except Exception as e:
