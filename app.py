@@ -498,6 +498,110 @@ class ArabicPDFOCRApp(QMainWindow):
             QMessageBox.warning(self, "Error", f"Failed to setup Tesseract: {e}")
             return False
     
+    def find_poppler_windows(self):
+        common_paths = [
+            r"C:\poppler\Library\bin",
+            r"C:\poppler\bin",
+            r"C:\Program Files\poppler\bin",
+            r"C:\Program Files (x86)\poppler\bin",
+            os.path.join(os.path.dirname(sys.executable), "poppler", "bin"),
+            os.path.join(os.path.dirname(sys.executable), "poppler", "Library", "bin"),
+        ]
+        for path in common_paths:
+            pdftoppm = os.path.join(path, "pdftoppm.exe")
+            if os.path.exists(pdftoppm):
+                return path
+        return None
+    
+    def install_poppler_windows_auto(self):
+        try:
+            app_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
+            poppler_dir = app_dir / "poppler"
+            poppler_bin = poppler_dir / "bin" / "pdftoppm.exe"
+            
+            if poppler_bin.exists():
+                return str(poppler_dir / "Library" / "bin") if (poppler_dir / "Library" / "bin").exists() else str(poppler_dir / "bin")
+            
+            reply = QMessageBox.question(
+                self,
+                "Poppler Not Found",
+                "Poppler is required for PDF processing but not found.\n\n"
+                "Would you like to download and install it automatically?\n\n"
+                "This will download Poppler (~20MB) and extract it.\n\n"
+                "Click Yes to proceed, No to cancel.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            
+            if reply == QMessageBox.No:
+                QMessageBox.information(
+                    self,
+                    "Manual Installation",
+                    "Please install Poppler manually:\n\n"
+                    "1. Download from:\n"
+                    "   https://github.com/oschwartz10612/poppler-windows/releases\n\n"
+                    "2. Extract to: C:\\poppler\n"
+                    "3. Restart this application"
+                )
+                return None
+            
+            temp_dir = Path(os.environ.get('TEMP', app_dir))
+            poppler_zip = temp_dir / "poppler-windows.zip"
+            
+            poppler_url = "https://github.com/oschwartz10612/poppler-windows/releases/download/v24.02.0-0/Release-24.02.0-0.zip"
+            
+            self.update_status("Downloading Poppler...")
+            QApplication.processEvents()
+            
+            if not self.download_file(poppler_url, poppler_zip, lambda p: self.update_status(f"Downloading Poppler... {p}%")):
+                QMessageBox.critical(
+                    self,
+                    "Download Failed",
+                    "Failed to download Poppler.\n\n"
+                    "Please download manually from:\n"
+                    "https://github.com/oschwartz10612/poppler-windows/releases\n\n"
+                    "Extract to: C:\\poppler"
+                )
+                return None
+            
+            self.update_status("Extracting Poppler...")
+            QApplication.processEvents()
+            
+            try:
+                if poppler_dir.exists():
+                    shutil.rmtree(poppler_dir)
+                poppler_dir.mkdir(parents=True, exist_ok=True)
+                
+                with zipfile.ZipFile(poppler_zip, 'r') as zip_ref:
+                    zip_ref.extractall(poppler_dir)
+                
+                poppler_zip.unlink(missing_ok=True)
+                
+                poppler_bin_path = poppler_dir / "Library" / "bin" / "pdftoppm.exe"
+                if not poppler_bin_path.exists():
+                    poppler_bin_path = poppler_dir / "bin" / "pdftoppm.exe"
+                
+                if poppler_bin_path.exists():
+                    bin_dir = str(poppler_bin_path.parent)
+                    QMessageBox.information(
+                        self,
+                        "Installation Complete",
+                        "Poppler has been installed successfully!\n\n"
+                        "The application is now ready to use."
+                    )
+                    return bin_dir
+                else:
+                    QMessageBox.warning(self, "Error", "Poppler extracted but pdftoppm.exe not found")
+                    return None
+                    
+            except Exception as e:
+                QMessageBox.critical(self, "Extraction Error", f"Failed to extract Poppler:\n{e}")
+                return None
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to setup Poppler: {e}")
+            return None
+    
     def check_prerequisites(self):
         system = platform.system()
         
@@ -508,6 +612,13 @@ class ArabicPDFOCRApp(QMainWindow):
                     pytesseract.get_tesseract_version()
                 except Exception:
                     self.install_tesseract_windows_auto()
+            
+            poppler_path = self.find_poppler_windows()
+            if not poppler_path:
+                poppler_path = self.install_poppler_windows_auto()
+            
+            if poppler_path:
+                os.environ['PATH'] = poppler_path + os.pathsep + os.environ.get('PATH', '')
         else:
             try:
                 pytesseract.get_tesseract_version()
@@ -692,7 +803,11 @@ class ArabicPDFOCRApp(QMainWindow):
             self.signals.progress.emit(0.05)
             self.signals.status.emit("Converting PDF to images...")
             
-            images = convert_from_path(self.pdf_path, dpi=self.dpi)
+            poppler_path = self.find_poppler_windows() if platform.system() == "Windows" else None
+            if poppler_path:
+                images = convert_from_path(self.pdf_path, dpi=self.dpi, poppler_path=poppler_path)
+            else:
+                images = convert_from_path(self.pdf_path, dpi=self.dpi)
             total_pages = len(images)
             
             self.signals.status.emit(f"Found {total_pages} pages")
