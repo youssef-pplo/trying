@@ -45,6 +45,7 @@ class ArabicPDFOCRApp(QMainWindow):
         self.dpi = 400
         self.num_passes = 3
         self.is_processing = False
+        self.poppler_path = None
         self.signals = WorkerSignals()
         self.setup_ui()
         self.setup_connections()
@@ -613,12 +614,12 @@ class ArabicPDFOCRApp(QMainWindow):
                 except Exception:
                     self.install_tesseract_windows_auto()
             
-            poppler_path = self.find_poppler_windows()
-            if not poppler_path:
-                poppler_path = self.install_poppler_windows_auto()
+            self.poppler_path = self.find_poppler_windows()
+            if not self.poppler_path:
+                self.poppler_path = self.install_poppler_windows_auto()
             
-            if poppler_path:
-                os.environ['PATH'] = poppler_path + os.pathsep + os.environ.get('PATH', '')
+            if self.poppler_path:
+                os.environ['PATH'] = self.poppler_path + os.pathsep + os.environ.get('PATH', '')
         else:
             try:
                 pytesseract.get_tesseract_version()
@@ -803,9 +804,16 @@ class ArabicPDFOCRApp(QMainWindow):
             self.signals.progress.emit(0.05)
             self.signals.status.emit("Converting PDF to images...")
             
-            poppler_path = self.find_poppler_windows() if platform.system() == "Windows" else None
-            if poppler_path:
-                images = convert_from_path(self.pdf_path, dpi=self.dpi, poppler_path=poppler_path)
+            if platform.system() == "Windows":
+                if not self.poppler_path:
+                    self.poppler_path = self.find_poppler_windows()
+                    if not self.poppler_path:
+                        self.poppler_path = self.install_poppler_windows_auto()
+                
+                if self.poppler_path:
+                    images = convert_from_path(self.pdf_path, dpi=self.dpi, poppler_path=self.poppler_path)
+                else:
+                    raise Exception("Poppler is required but not found. Please install Poppler.")
             else:
                 images = convert_from_path(self.pdf_path, dpi=self.dpi)
             total_pages = len(images)
