@@ -586,17 +586,17 @@ class ArabicPDFOCRApp(QMainWindow):
             self.update_status("Downloading Poppler...")
             QApplication.processEvents()
             
-                if not self.download_file(poppler_url, poppler_zip, lambda p: self.update_status(f"Downloading Poppler... {p}%")):
-                    dialog = LinkMessageBox(
-                        self,
-                        "Download Failed",
-                        "Failed to download Poppler.\n\n"
-                        "Please download manually from the link below:\n\n"
-                        "Extract to: C:\\poppler",
-                        {"Download Poppler for Windows": "https://github.com/oschwartz10612/poppler-windows/releases"}
-                    )
-                    dialog.exec()
-                    return None
+            if not self.download_file(poppler_url, poppler_zip, lambda p: self.update_status(f"Downloading Poppler... {p}%")):
+                dialog = LinkMessageBox(
+                    self,
+                    "Download Failed",
+                    "Failed to download Poppler.\n\n"
+                    "Please download manually from the link below:\n\n"
+                    "Extract to: C:\\poppler",
+                    {"Download Poppler for Windows": "https://github.com/oschwartz10612/poppler-windows/releases"}
+                )
+                dialog.exec()
+                return None
             
             self.update_status("Extracting Poppler...")
             QApplication.processEvents()
