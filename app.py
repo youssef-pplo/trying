@@ -4,10 +4,6 @@ import sys
 import os
 import platform
 import threading
-import subprocess
-import urllib.request
-import zipfile
-import shutil
 from pathlib import Path
 from typing import List
 
@@ -17,11 +13,12 @@ try:
         QPushButton, QLabel, QLineEdit, QTextEdit, QProgressBar,
         QComboBox, QFileDialog, QMessageBox, QFrame, QGroupBox, QDialog, QDialogButtonBox
     )
-    from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QTimer, Signal, QObject, QUrl
-    from PySide6.QtGui import QFont, QPalette, QColor, QIcon, QDesktopServices
-    from pdf2image import convert_from_path
-    import pytesseract
+    from PySide6.QtCore import Qt, Signal, QObject, QUrl
+    from PySide6.QtGui import QFont, QDesktopServices
+    import fitz
+    import easyocr
     from PIL import Image, ImageEnhance, ImageFilter
+    import numpy as np
 except ImportError as e:
     print(f"Error: Missing required package: {e}")
     print("Run: pip install -r requirements.txt")
@@ -69,15 +66,15 @@ class ArabicPDFOCRApp(QMainWindow):
         super().__init__()
         self.pdf_path = ""
         self.output_path = ""
-        self.language = "ara"
+        self.language = "ar"
         self.dpi = 400
         self.num_passes = 3
         self.is_processing = False
-        self.poppler_path = None
+        self.reader = None
         self.signals = WorkerSignals()
         self.setup_ui()
         self.setup_connections()
-        self.check_prerequisites()
+        self.init_ocr_reader()
         self.center_window()
     
     def setup_ui(self):
@@ -188,15 +185,15 @@ class ArabicPDFOCRApp(QMainWindow):
         main_layout.setContentsMargins(20, 15, 20, 15)
         
         header = QLabel("Arabic PDF to Text OCR")
-        header.setFont(QFont("Segoe UI", 32, QFont.Bold))
+        header.setFont(QFont("Segoe UI", 24, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet("color: #0ea5e9; margin-bottom: 10px;")
+        header.setStyleSheet("color: #0ea5e9; margin-bottom: 5px;")
         main_layout.addWidget(header)
         
         subtitle = QLabel("Convert PDF documents with maximum accuracy")
-        subtitle.setFont(QFont("Segoe UI", 14))
+        subtitle.setFont(QFont("Segoe UI", 11))
         subtitle.setAlignment(Qt.AlignCenter)
-        subtitle.setStyleSheet("color: #94a3b8; margin-bottom: 20px;")
+        subtitle.setStyleSheet("color: #94a3b8; margin-bottom: 10px;")
         main_layout.addWidget(subtitle)
         
         file_group = QGroupBox("File Selection")
@@ -359,315 +356,20 @@ class ArabicPDFOCRApp(QMainWindow):
         frame.moveCenter(screen)
         self.move(frame.topLeft())
     
-    def find_tesseract_windows(self):
-        common_paths = [
-            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-            r"C:\Tesseract-OCR\tesseract.exe",
-            os.path.join(os.path.dirname(sys.executable), "tesseract", "tesseract.exe"),
-            os.path.join(os.path.dirname(sys.executable), "Tesseract-OCR", "tesseract.exe"),
-        ]
-        for path in common_paths:
-            if os.path.exists(path):
-                pytesseract.pytesseract.tesseract_cmd = path
-                return path
-        return None
-    
-    def download_file(self, url, dest_path, progress_callback=None):
+    def init_ocr_reader(self):
         try:
-            def show_progress(block_num, block_size, total_size):
-                if progress_callback and total_size > 0:
-                    percent = min(100, (block_num * block_size * 100) // total_size)
-                    progress_callback(percent)
-            
-            urllib.request.urlretrieve(url, dest_path, show_progress)
-            return True
+            self.update_status("Initializing OCR engine...")
+            lang_map = {
+                "Arabic": ["ar"],
+                "Arabic + English": ["ar", "en"],
+                "English": ["en"]
+            }
+            current_lang = self.language_combo.currentText()
+            languages = lang_map.get(current_lang, ["ar"])
+            self.reader = easyocr.Reader(languages, gpu=False)
+            self.update_status("OCR engine ready")
         except Exception as e:
-            return False
-    
-    def install_tesseract_silent(self, installer_path):
-        try:
-            install_cmd = [
-                str(installer_path),
-                "/S",
-                "/D=C:\\Program Files\\Tesseract-OCR"
-            ]
-            result = subprocess.run(install_cmd, capture_output=True, timeout=300)
-            return result.returncode == 0
-        except Exception:
-            return False
-    
-    def install_tesseract_windows_auto(self):
-        try:
-            app_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
-            tesseract_dir = app_dir / "Tesseract-OCR"
-            tesseract_exe = tesseract_dir / "tesseract.exe"
-            
-            if tesseract_exe.exists():
-                pytesseract.pytesseract.tesseract_cmd = str(tesseract_exe)
-                return True
-            
-            reply = QMessageBox.question(
-                self,
-                "Tesseract Not Found",
-                "Tesseract OCR is required but not found.\n\n"
-                "Would you like to install it automatically?\n\n"
-                "This will:\n"
-                "1. Download Tesseract installer (~50MB)\n"
-                "2. Install it automatically\n"
-                "3. Configure the application\n\n"
-                "Click Yes to proceed, No to cancel.",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes
-            )
-            
-            if reply == QMessageBox.No:
-                dialog = LinkMessageBox(
-                    self,
-                    "Manual Installation",
-                    "Please install Tesseract OCR manually:\n\n"
-                    "1. Download from the link below\n"
-                    "2. Install to default location: C:\\Program Files\\Tesseract-OCR\n"
-                    "3. Restart this application",
-                    {"Download Tesseract OCR": "https://github.com/UB-Mannheim/tesseract/wiki"}
-                )
-                dialog.exec()
-                return False
-            
-            temp_dir = Path(os.environ.get('TEMP', app_dir))
-            installer_path = temp_dir / "tesseract-installer.exe"
-            
-            reply2 = QMessageBox.question(
-                self,
-                "Auto-Install Tesseract",
-                "I can download and install Tesseract automatically.\n\n"
-                "This will:\n"
-                "1. Download Tesseract installer (~50MB)\n"
-                "2. Install it silently\n"
-                "3. Configure automatically\n\n"
-                "Click Yes to auto-install, No for manual installation.",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes
-            )
-            
-            if reply2 == QMessageBox.Yes:
-                temp_dir = Path(os.environ.get('TEMP', app_dir))
-                installer_path = temp_dir / "tesseract-installer.exe"
-                
-                tesseract_url = "https://digi.bib.uni-mannheim.de/tesseract/tesseract-ocr-w64-setup-5.4.0.20240619.exe"
-                
-                self.update_status("Downloading Tesseract OCR installer...")
-                QApplication.processEvents()
-                
-                if not self.download_file(tesseract_url, installer_path, lambda p: self.update_status(f"Downloading... {p}%")):
-                    dialog = LinkMessageBox(
-                        self,
-                        "Download Failed",
-                        "Failed to download Tesseract installer.\n\n"
-                        "Please download manually from the link below:\n\n"
-                        "Install to: C:\\Program Files\\Tesseract-OCR",
-                        {"Download Tesseract OCR": "https://github.com/UB-Mannheim/tesseract/wiki"}
-                    )
-                    dialog.exec()
-                    return False
-                
-                self.update_status("Installing Tesseract OCR...")
-                QApplication.processEvents()
-                
-                if self.install_tesseract_silent(installer_path):
-                    default_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-                    if os.path.exists(default_path):
-                        pytesseract.pytesseract.tesseract_cmd = default_path
-                        try:
-                            pytesseract.get_tesseract_version()
-                            QMessageBox.information(
-                                self,
-                                "Installation Complete",
-                                "Tesseract OCR has been installed successfully!\n\n"
-                                "The application is now ready to use."
-                            )
-                            installer_path.unlink(missing_ok=True)
-                            return True
-                        except Exception:
-                            pass
-                
-                QMessageBox.warning(
-                    self,
-                    "Installation Issue",
-                    "Tesseract installer ran but may need a restart.\n\n"
-                    "Please restart this application to complete setup."
-                )
-                installer_path.unlink(missing_ok=True)
-                return False
-            else:
-                dialog = LinkMessageBox(
-                    self,
-                    "Manual Installation",
-                    "To install Tesseract OCR manually:\n\n"
-                    "1. Download from the link below\n"
-                    "2. Run the installer\n"
-                    "3. Install to: C:\\Program Files\\Tesseract-OCR\n"
-                    "4. Restart this application\n\n"
-                    "The app will auto-detect it after installation.",
-                    {"Download Tesseract OCR": "https://github.com/UB-Mannheim/tesseract/wiki"}
-                )
-                dialog.exec()
-            
-            default_paths = [
-                r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-                r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-            ]
-            
-            for path in default_paths:
-                if os.path.exists(path):
-                    pytesseract.pytesseract.tesseract_cmd = path
-                    QMessageBox.information(self, "Success", f"Tesseract found at:\n{path}\n\nApplication is ready to use!")
-                    return True
-            
-            return False
-            
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to setup Tesseract: {e}")
-            return False
-    
-    def find_poppler_windows(self):
-        common_paths = [
-            r"C:\poppler\Library\bin",
-            r"C:\poppler\bin",
-            r"C:\Program Files\poppler\bin",
-            r"C:\Program Files (x86)\poppler\bin",
-            os.path.join(os.path.dirname(sys.executable), "poppler", "bin"),
-            os.path.join(os.path.dirname(sys.executable), "poppler", "Library", "bin"),
-        ]
-        for path in common_paths:
-            pdftoppm = os.path.join(path, "pdftoppm.exe")
-            if os.path.exists(pdftoppm):
-                return path
-        return None
-    
-    def install_poppler_windows_auto(self):
-        try:
-            app_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
-            poppler_dir = app_dir / "poppler"
-            poppler_bin = poppler_dir / "bin" / "pdftoppm.exe"
-            
-            if poppler_bin.exists():
-                return str(poppler_dir / "Library" / "bin") if (poppler_dir / "Library" / "bin").exists() else str(poppler_dir / "bin")
-            
-            reply = QMessageBox.question(
-                self,
-                "Poppler Not Found",
-                "Poppler is required for PDF processing but not found.\n\n"
-                "Would you like to download and install it automatically?\n\n"
-                "This will download Poppler (~20MB) and extract it.\n\n"
-                "Click Yes to proceed, No to cancel.",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes
-            )
-            
-            if reply == QMessageBox.No:
-                dialog = LinkMessageBox(
-                    self,
-                    "Manual Installation",
-                    "Please install Poppler manually:\n\n"
-                    "1. Download from the link below\n"
-                    "2. Extract to: C:\\poppler\n"
-                    "3. Restart this application",
-                    {"Download Poppler for Windows": "https://github.com/oschwartz10612/poppler-windows/releases"}
-                )
-                dialog.exec()
-                return None
-            
-            temp_dir = Path(os.environ.get('TEMP', app_dir))
-            poppler_zip = temp_dir / "poppler-windows.zip"
-            
-            poppler_url = "https://github.com/oschwartz10612/poppler-windows/releases/download/v24.02.0-0/Release-24.02.0-0.zip"
-            
-            self.update_status("Downloading Poppler...")
-            QApplication.processEvents()
-            
-            if not self.download_file(poppler_url, poppler_zip, lambda p: self.update_status(f"Downloading Poppler... {p}%")):
-                dialog = LinkMessageBox(
-                    self,
-                    "Download Failed",
-                    "Failed to download Poppler.\n\n"
-                    "Please download manually from the link below:\n\n"
-                    "Extract to: C:\\poppler",
-                    {"Download Poppler for Windows": "https://github.com/oschwartz10612/poppler-windows/releases"}
-                )
-                dialog.exec()
-                return None
-            
-            self.update_status("Extracting Poppler...")
-            QApplication.processEvents()
-            
-            try:
-                if poppler_dir.exists():
-                    shutil.rmtree(poppler_dir)
-                poppler_dir.mkdir(parents=True, exist_ok=True)
-                
-                with zipfile.ZipFile(poppler_zip, 'r') as zip_ref:
-                    zip_ref.extractall(poppler_dir)
-                
-                poppler_zip.unlink(missing_ok=True)
-                
-                poppler_bin_path = poppler_dir / "Library" / "bin" / "pdftoppm.exe"
-                if not poppler_bin_path.exists():
-                    poppler_bin_path = poppler_dir / "bin" / "pdftoppm.exe"
-                
-                if poppler_bin_path.exists():
-                    bin_dir = str(poppler_bin_path.parent)
-                    QMessageBox.information(
-                        self,
-                        "Installation Complete",
-                        "Poppler has been installed successfully!\n\n"
-                        "The application is now ready to use."
-                    )
-                    return bin_dir
-                else:
-                    QMessageBox.warning(self, "Error", "Poppler extracted but pdftoppm.exe not found")
-                    return None
-                    
-            except Exception as e:
-                QMessageBox.critical(self, "Extraction Error", f"Failed to extract Poppler:\n{e}")
-                return None
-            
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to setup Poppler: {e}")
-            return None
-    
-    def check_prerequisites(self):
-        system = platform.system()
-        
-        if system == "Windows":
-            tesseract_path = self.find_tesseract_windows()
-            if not tesseract_path:
-                try:
-                    pytesseract.get_tesseract_version()
-                except Exception:
-                    self.install_tesseract_windows_auto()
-            
-            self.poppler_path = self.find_poppler_windows()
-            if not self.poppler_path:
-                self.poppler_path = self.install_poppler_windows_auto()
-            
-            if self.poppler_path:
-                os.environ['PATH'] = self.poppler_path + os.pathsep + os.environ.get('PATH', '')
-        else:
-            try:
-                pytesseract.get_tesseract_version()
-            except Exception:
-                dialog = LinkMessageBox(
-                    self,
-                    "Tesseract Not Found",
-                    "Tesseract OCR is not installed.\n\n"
-                    "Installation commands:\n"
-                    "Ubuntu/Debian: sudo apt-get install tesseract-ocr tesseract-ocr-ara\n"
-                    "Fedora: sudo dnf install tesseract tesseract-langpack-ara\n"
-                    "Arch: sudo pacman -S tesseract tesseract-data-ara",
-                    {"Tesseract Documentation": "https://github.com/tesseract-ocr/tesseract"}
-                )
-                dialog.exec()
+            QMessageBox.warning(self, "OCR Initialization", f"Failed to initialize OCR:\n{e}\n\nTrying to continue...")
     
     def browse_pdf(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -741,11 +443,11 @@ class ArabicPDFOCRApp(QMainWindow):
         
         lang_text = self.language_combo.currentText()
         lang_map = {
-            "Arabic": "ara",
-            "Arabic + English": "ara+eng",
-            "English": "eng"
+            "Arabic": ["ar"],
+            "Arabic + English": ["ar", "en"],
+            "English": ["en"]
         }
-        self.language = lang_map.get(lang_text, "ara")
+        languages = lang_map.get(lang_text, ["ar"])
         
         dpi_text = self.dpi_combo.currentText()
         dpi_map = {
@@ -769,14 +471,38 @@ class ArabicPDFOCRApp(QMainWindow):
             QMessageBox.warning(self, "Error", "Selected file is not a PDF.")
             return
         
+        if not self.reader:
+            try:
+                self.update_status("Initializing OCR engine...")
+                self.reader = easyocr.Reader(languages, gpu=False)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to initialize OCR engine:\n{e}")
+                return
+        
         self.is_processing = True
         self.process_btn.setEnabled(False)
         self.process_btn.setText("Processing...")
         self.update_progress(0)
         self.update_status("Starting...")
         
-        thread = threading.Thread(target=self.process_pdf, daemon=True)
+        thread = threading.Thread(target=self.process_pdf, daemon=True, args=(languages,))
         thread.start()
+    
+    def pdf_to_images_pymupdf(self, pdf_path, dpi):
+        doc = fitz.open(pdf_path)
+        images = []
+        zoom = dpi / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+        
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            pix = page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("png")
+            img = Image.open(io.BytesIO(img_data))
+            images.append(img)
+        
+        doc.close()
+        return images
     
     def preprocess_image(self, image):
         processed = []
@@ -793,22 +519,21 @@ class ArabicPDFOCRApp(QMainWindow):
             processed.append(enhancer.enhance(2.0))
         return processed
     
-    def ocr_multiple_passes(self, image, lang, num_passes):
+    def ocr_multiple_passes_easyocr(self, image, languages, num_passes):
         all_results = []
-        psm_modes = [
-            ('6', 'Uniform block'),
-            ('3', 'Automatic'),
-            ('11', 'Sparse text'),
-            ('12', 'Sparse with OSD')
-        ]
         processed_images = self.preprocess_image(image)
         
         for pass_num in range(num_passes):
-            psm_mode, _ = psm_modes[pass_num % len(psm_modes)]
             processed_img = processed_images[pass_num % len(processed_images)]
             try:
-                config = f'--psm {psm_mode}'
-                text = pytesseract.image_to_string(processed_img, lang=lang, config=config)
+                img_array = np.array(processed_img)
+                if len(img_array.shape) == 2:
+                    img_array = np.stack([img_array] * 3, axis=-1)
+                
+                results = self.reader.readtext(img_array, paragraph=False)
+                text_parts = [result[1] for result in results]
+                text = '\n'.join(text_parts)
+                
                 if text.strip():
                     all_results.append(text.strip())
             except Exception:
@@ -834,23 +559,13 @@ class ArabicPDFOCRApp(QMainWindow):
         
         return best_result
     
-    def process_pdf(self):
+    def process_pdf(self, languages):
         try:
+            import io
             self.signals.progress.emit(0.05)
             self.signals.status.emit("Converting PDF to images...")
             
-            if platform.system() == "Windows":
-                if not self.poppler_path:
-                    self.poppler_path = self.find_poppler_windows()
-                    if not self.poppler_path:
-                        self.poppler_path = self.install_poppler_windows_auto()
-                
-                if self.poppler_path:
-                    images = convert_from_path(self.pdf_path, dpi=self.dpi, poppler_path=self.poppler_path)
-                else:
-                    raise Exception("Poppler is required but not found. Please install Poppler.")
-            else:
-                images = convert_from_path(self.pdf_path, dpi=self.dpi)
+            images = self.pdf_to_images_pymupdf(self.pdf_path, self.dpi)
             total_pages = len(images)
             
             self.signals.status.emit(f"Found {total_pages} pages")
@@ -865,7 +580,7 @@ class ArabicPDFOCRApp(QMainWindow):
                 self.signals.progress.emit(page_progress)
                 self.signals.status.emit(f"Processing page {i}/{total_pages}...")
                 
-                text = self.ocr_multiple_passes(image, self.language, self.num_passes)
+                text = self.ocr_multiple_passes_easyocr(image, languages, self.num_passes)
                 all_text.append(f"\n{'='*60}\nPage {i}\n{'='*60}\n\n{text}\n")
                 
                 current_text = '\n'.join(all_text)
