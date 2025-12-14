@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 
 import sys
+import os
+import platform
 import threading
+import subprocess
+import urllib.request
+import zipfile
+import shutil
 from pathlib import Path
 from typing import List
 
@@ -324,19 +330,91 @@ class ArabicPDFOCRApp(QMainWindow):
         frame.moveCenter(screen)
         self.move(frame.topLeft())
     
-    def check_prerequisites(self):
+    def find_tesseract_windows(self):
+        common_paths = [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            r"C:\Tesseract-OCR\tesseract.exe",
+            os.path.join(os.path.dirname(sys.executable), "tesseract", "tesseract.exe"),
+            os.path.join(os.path.dirname(sys.executable), "Tesseract-OCR", "tesseract.exe"),
+        ]
+        for path in common_paths:
+            if os.path.exists(path):
+                pytesseract.pytesseract.tesseract_cmd = path
+                return path
+        return None
+    
+    def install_tesseract_windows_auto(self):
         try:
-            pytesseract.get_tesseract_version()
-        except Exception:
-            QMessageBox.warning(
+            app_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
+            tesseract_dir = app_dir / "Tesseract-OCR"
+            tesseract_exe = tesseract_dir / "tesseract.exe"
+            
+            if tesseract_exe.exists():
+                pytesseract.pytesseract.tesseract_cmd = str(tesseract_exe)
+                return True
+            
+            reply = QMessageBox.question(
                 self,
                 "Tesseract Not Found",
-                "Tesseract OCR is not installed.\n\n"
-                "Installation:\n"
-                "Ubuntu/Debian: sudo apt-get install tesseract-ocr tesseract-ocr-ara\n"
-                "Fedora: sudo dnf install tesseract tesseract-langpack-ara\n"
-                "Arch: sudo pacman -S tesseract tesseract-data-ara"
+                "Tesseract OCR is required but not found.\n\n"
+                "Would you like to download and install it automatically?\n\n"
+                "This will download ~50MB and install Tesseract OCR.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
             )
+            
+            if reply == QMessageBox.No:
+                QMessageBox.information(
+                    self,
+                    "Manual Installation",
+                    "Please install Tesseract OCR manually:\n\n"
+                    "1. Download from: https://github.com/UB-Mannheim/tesseract/wiki\n"
+                    "2. Install to default location\n"
+                    "3. Restart this application"
+                )
+                return False
+            
+            QMessageBox.information(
+                self,
+                "Download Required",
+                "Automatic installation requires manual download.\n\n"
+                "Please:\n"
+                "1. Download Tesseract from:\n"
+                "   https://github.com/UB-Mannheim/tesseract/wiki\n"
+                "2. Install it\n"
+                "3. Restart this application\n\n"
+                "The app will auto-detect it after installation."
+            )
+            return False
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to setup Tesseract: {e}")
+            return False
+    
+    def check_prerequisites(self):
+        system = platform.system()
+        
+        if system == "Windows":
+            tesseract_path = self.find_tesseract_windows()
+            if not tesseract_path:
+                try:
+                    pytesseract.get_tesseract_version()
+                except Exception:
+                    self.install_tesseract_windows_auto()
+        else:
+            try:
+                pytesseract.get_tesseract_version()
+            except Exception:
+                QMessageBox.warning(
+                    self,
+                    "Tesseract Not Found",
+                    "Tesseract OCR is not installed.\n\n"
+                    "Installation:\n"
+                    "Ubuntu/Debian: sudo apt-get install tesseract-ocr tesseract-ocr-ara\n"
+                    "Fedora: sudo dnf install tesseract tesseract-langpack-ara\n"
+                    "Arch: sudo pacman -S tesseract tesseract-data-ara"
+                )
     
     def browse_pdf(self):
         filename, _ = QFileDialog.getOpenFileName(
