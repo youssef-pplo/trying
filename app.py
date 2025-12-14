@@ -2,6 +2,7 @@
 
 import sys
 import os
+import io
 import platform
 import threading
 from pathlib import Path
@@ -561,7 +562,6 @@ class ArabicPDFOCRApp(QMainWindow):
     
     def process_pdf(self, languages):
         try:
-            import io
             self.signals.progress.emit(0.05)
             self.signals.status.emit("Converting PDF to images...")
             
