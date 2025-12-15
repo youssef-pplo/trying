@@ -5,8 +5,9 @@ import os
 import io
 import platform
 import threading
+import subprocess
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 try:
     from PySide6.QtWidgets import (
@@ -23,6 +24,42 @@ except ImportError as e:
     print(f"Error: Missing required package: {e}")
     print("Run: pip install -r requirements.txt")
     sys.exit(1)
+
+
+def find_tesseract_windows() -> Optional[str]:
+    """Find Tesseract executable on Windows."""
+    if platform.system() != "Windows":
+        return None
+    
+    common_paths = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        r"C:\Users\{}\AppData\Local\Programs\Tesseract-OCR\tesseract.exe".format(os.getenv("USERNAME", "")),
+    ]
+    
+    for path in common_paths:
+        if os.path.exists(path):
+            return path
+    
+    try:
+        result = subprocess.run(["where", "tesseract"], capture_output=True, text=True, timeout=2)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split('\n')[0]
+    except Exception:
+        pass
+    
+    return None
+
+
+def setup_tesseract_path():
+    """Configure Tesseract path for Windows."""
+    if platform.system() == "Windows":
+        tesseract_path = find_tesseract_windows()
+        if tesseract_path:
+            pytesseract.pytesseract.tesseract_cmd = tesseract_path
+
+
+setup_tesseract_path()
 
 
 class WorkerSignals(QObject):
@@ -73,6 +110,7 @@ class ArabicPDFOCRApp(QMainWindow):
         self.signals = WorkerSignals()
         self.setup_ui()
         self.setup_connections()
+        self.check_prerequisites()
         self.center_window()
     
     def setup_ui(self):
@@ -354,13 +392,23 @@ class ArabicPDFOCRApp(QMainWindow):
         frame.moveCenter(screen)
         self.move(frame.topLeft())
     
-    def init_ocr_reader(self):
-        # For Tesseract-based OCR we just rely on system installation.
+    def check_prerequisites(self):
+        """Check if Tesseract is available and language data exists."""
         try:
-            pytesseract.get_tesseract_version()
-            self.update_status("Tesseract OCR detected")
-        except Exception:
-            self.update_status("Tesseract OCR not detected (will error on first use)")
+            version = pytesseract.get_tesseract_version()
+            self.update_status(f"Tesseract OCR {version} detected")
+            
+            try:
+                langs = pytesseract.get_languages()
+                if self.language.split('+')[0] not in langs:
+                    self.update_status(f"Warning: Language '{self.language}' may not be installed")
+            except Exception:
+                pass
+        except Exception as e:
+            error_msg = f"Tesseract OCR not found: {e}"
+            if platform.system() == "Windows":
+                error_msg += "\n\nPlease install Tesseract from:\nhttps://github.com/UB-Mannheim/tesseract/wiki"
+            self.update_status(error_msg)
     
     def browse_pdf(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -505,17 +553,30 @@ class ArabicPDFOCRApp(QMainWindow):
     def ocr_page_tesseract(self, image):
         processed_images = self.preprocess_image(image)
         all_results = []
+        psm_modes = ["6", "3", "11", "1"]
+        
         for pass_num in range(self.num_passes):
             processed_img = processed_images[pass_num % len(processed_images)]
-            try:
-                config = "--psm 6"
-                text = pytesseract.image_to_string(processed_img, lang=self.language, config=config)
-                if text.strip():
-                    all_results.append(text.strip())
-            except Exception:
-                continue
+            for psm in psm_modes:
+                try:
+                    config = f"--psm {psm}"
+                    text = pytesseract.image_to_string(processed_img, lang=self.language, config=config)
+                    if text.strip():
+                        all_results.append(text.strip())
+                except Exception:
+                    continue
+        
         if not all_results:
+            try:
+                text = pytesseract.image_to_string(image, lang=self.language)
+                if text.strip():
+                    return text.strip()
+            except Exception as e:
+                error_msg = str(e)
+                if "Error opening data file" in error_msg or "Failed loading language" in error_msg:
+                    self.signals.error.emit(f"Language data not found for '{self.language}'. Please install Tesseract language pack.")
             return ""
+        
         best_result = max(all_results, key=len)
         return best_result
     
