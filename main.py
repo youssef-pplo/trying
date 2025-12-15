@@ -6,12 +6,13 @@ Converts PDF files to text using Tesseract OCR with Arabic language support.
 
 import os
 import sys
+import io
 import argparse
 from pathlib import Path
 from typing import List, Optional
 
 try:
-    from pdf2image import convert_from_path
+    import fitz
     import pytesseract
     from PIL import Image
 except ImportError as e:
@@ -41,7 +42,7 @@ def check_arabic_language() -> bool:
 
 def pdf_to_images(pdf_path: str, dpi: int = 300) -> List[Image.Image]:
     """
-    Convert PDF pages to images.
+    Convert PDF pages to images using PyMuPDF (no Poppler).
     
     Args:
         pdf_path: Path to the PDF file
@@ -52,7 +53,17 @@ def pdf_to_images(pdf_path: str, dpi: int = 300) -> List[Image.Image]:
     """
     try:
         print(f"Converting PDF to images (DPI: {dpi})...")
-        images = convert_from_path(pdf_path, dpi=dpi)
+        doc = fitz.open(pdf_path)
+        images: List[Image.Image] = []
+        zoom = dpi / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            pix = page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("png")
+            img = Image.open(io.BytesIO(img_data))
+            images.append(img)
+        doc.close()
         print(f"Successfully converted {len(images)} pages to images.")
         return images
     except Exception as e:
@@ -215,5 +226,7 @@ Examples:
 
 if __name__ == '__main__':
     main()
+
+
 
 
