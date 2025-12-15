@@ -17,9 +17,8 @@ try:
     from PySide6.QtCore import Qt, Signal, QObject, QUrl
     from PySide6.QtGui import QFont, QDesktopServices
     import fitz
-    import easyocr
+    import pytesseract
     from PIL import Image, ImageEnhance, ImageFilter
-    import numpy as np
 except ImportError as e:
     print(f"Error: Missing required package: {e}")
     print("Run: pip install -r requirements.txt")
@@ -67,15 +66,13 @@ class ArabicPDFOCRApp(QMainWindow):
         super().__init__()
         self.pdf_path = ""
         self.output_path = ""
-        self.language = "ar"
+        self.language = "ara"
         self.dpi = 400
         self.num_passes = 3
         self.is_processing = False
-        self.reader = None
         self.signals = WorkerSignals()
         self.setup_ui()
         self.setup_connections()
-        self.init_ocr_reader()
         self.center_window()
     
     def setup_ui(self):
@@ -358,19 +355,12 @@ class ArabicPDFOCRApp(QMainWindow):
         self.move(frame.topLeft())
     
     def init_ocr_reader(self):
+        # For Tesseract-based OCR we just rely on system installation.
         try:
-            self.update_status("Initializing OCR engine...")
-            lang_map = {
-                "Arabic": ["ar"],
-                "Arabic + English": ["ar", "en"],
-                "English": ["en"]
-            }
-            current_lang = self.language_combo.currentText()
-            languages = lang_map.get(current_lang, ["ar"])
-            self.reader = easyocr.Reader(languages, gpu=False)
-            self.update_status("OCR engine ready")
-        except Exception as e:
-            QMessageBox.warning(self, "OCR Initialization", f"Failed to initialize OCR:\n{e}\n\nTrying to continue...")
+            pytesseract.get_tesseract_version()
+            self.update_status("Tesseract OCR detected")
+        except Exception:
+            self.update_status("Tesseract OCR not detected (will error on first use)")
     
     def browse_pdf(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -444,11 +434,11 @@ class ArabicPDFOCRApp(QMainWindow):
         
         lang_text = self.language_combo.currentText()
         lang_map = {
-            "Arabic": ["ar"],
-            "Arabic + English": ["ar", "en"],
-            "English": ["en"]
+            "Arabic": "ara",
+            "Arabic + English": "ara+eng",
+            "English": "eng"
         }
-        languages = lang_map.get(lang_text, ["ar"])
+        self.language = lang_map.get(lang_text, "ara")
         
         dpi_text = self.dpi_combo.currentText()
         dpi_map = {
@@ -472,21 +462,13 @@ class ArabicPDFOCRApp(QMainWindow):
             QMessageBox.warning(self, "Error", "Selected file is not a PDF.")
             return
         
-        if not self.reader:
-            try:
-                self.update_status("Initializing OCR engine...")
-                self.reader = easyocr.Reader(languages, gpu=False)
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to initialize OCR engine:\n{e}")
-                return
-        
         self.is_processing = True
         self.process_btn.setEnabled(False)
         self.process_btn.setText("Processing...")
         self.update_progress(0)
         self.update_status("Starting...")
         
-        thread = threading.Thread(target=self.process_pdf, daemon=True, args=(languages,))
+        thread = threading.Thread(target=self.process_pdf, daemon=True)
         thread.start()
     
     def pdf_to_images_pymupdf(self, pdf_path, dpi):
@@ -520,47 +502,24 @@ class ArabicPDFOCRApp(QMainWindow):
             processed.append(enhancer.enhance(2.0))
         return processed
     
-    def ocr_multiple_passes_easyocr(self, image, languages, num_passes):
-        all_results = []
+    def ocr_page_tesseract(self, image):
         processed_images = self.preprocess_image(image)
-        
-        for pass_num in range(num_passes):
+        all_results = []
+        for pass_num in range(self.num_passes):
             processed_img = processed_images[pass_num % len(processed_images)]
             try:
-                img_array = np.array(processed_img)
-                if len(img_array.shape) == 2:
-                    img_array = np.stack([img_array] * 3, axis=-1)
-                
-                results = self.reader.readtext(img_array, paragraph=False)
-                text_parts = [result[1] for result in results]
-                text = '\n'.join(text_parts)
-                
+                config = "--psm 6"
+                text = pytesseract.image_to_string(processed_img, lang=self.language, config=config)
                 if text.strip():
                     all_results.append(text.strip())
             except Exception:
                 continue
-        
         if not all_results:
             return ""
-        
         best_result = max(all_results, key=len)
-        all_lines = []
-        seen_lines = set()
-        for result in all_results:
-            lines = result.split('\n')
-            for line in lines:
-                line_clean = line.strip()
-                if line_clean and line_clean not in seen_lines:
-                    seen_lines.add(line_clean)
-                    all_lines.append(line_clean)
-        
-        merged_result = '\n'.join(all_lines)
-        if len(merged_result) > len(best_result) * 1.2:
-            return merged_result
-        
         return best_result
     
-    def process_pdf(self, languages):
+    def process_pdf(self):
         try:
             self.signals.progress.emit(0.05)
             self.signals.status.emit("Converting PDF to images...")
@@ -580,7 +539,7 @@ class ArabicPDFOCRApp(QMainWindow):
                 self.signals.progress.emit(page_progress)
                 self.signals.status.emit(f"Processing page {i}/{total_pages}...")
                 
-                text = self.ocr_multiple_passes_easyocr(image, languages, self.num_passes)
+                text = self.ocr_page_tesseract(image)
                 all_text.append(f"\n{'='*60}\nPage {i}\n{'='*60}\n\n{text}\n")
                 
                 current_text = '\n'.join(all_text)
