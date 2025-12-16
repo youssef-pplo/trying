@@ -212,6 +212,29 @@ class ArabicPDFOCRApp(QMainWindow):
                 selection-background-color: #0ea5e9;
                 color: #ffffff;
             }
+            QMessageBox {
+                background-color: #ffffff;
+            }
+            QMessageBox QLabel {
+                color: #000000;
+                font-size: 13px;
+            }
+            QMessageBox QPushButton {
+                background-color: #0ea5e9;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 20px;
+                font-size: 13px;
+                font-weight: bold;
+                min-width: 80px;
+            }
+            QMessageBox QPushButton:hover {
+                background-color: #0284c7;
+            }
+            QMessageBox QPushButton:pressed {
+                background-color: #0369a1;
+            }
         """)
         
         central_widget = QWidget()
